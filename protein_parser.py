@@ -56,7 +56,7 @@ class ProteinParser(TextParsers, whitespace=r'[ \t]*'):
             lengths.append(len(as_[1:-1]))
         max_length = max(lengths)
         return *tuple(torch.tensor([la + [0] * (max_length - len(la)) for la in ll])
-                      for ll in zip(*inddata)), lengths
+                      for ll in zip(*inddata)), torch.tensor(lengths, dtype=torch.long)
 
 
 if __name__ == '__main__':
