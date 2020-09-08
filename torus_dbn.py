@@ -22,9 +22,11 @@ from multiple_formatter import Multiple
 from protein_parser import ProteinParser
 
 
-def model(phis=None, psis=None, lengths=None,
-          num_sequences=None, num_states=55,
-          prior_conc=0.1, prior_loc=0.0):
+def torus_dbn(phis=None, psis=None, lengths=None,
+              num_sequences=None, num_states=55,
+              prior_conc=0.1, prior_loc=0.0,
+              prior_length_shape=100., prior_length_rate=100.,
+              prior_kappa_scale=100., prior_kappa_min=10.):
     # From https://pyro.ai/examples/hmm.html
     with ignore_jit_warnings():
         if lengths is not None:
@@ -36,14 +38,20 @@ def model(phis=None, psis=None, lengths=None,
                                    dist.Dirichlet(torch.ones(num_states, num_states, dtype=torch.float)
                                                   * num_states)
                                    .to_event(1))
-    length_shape = pyro.sample('length_shape', dist.HalfCauchy(100.))
-    length_rate = pyro.sample('length_rate', dist.HalfCauchy(100.))
+    length_shape = pyro.sample('length_shape', dist.HalfCauchy(prior_length_shape))
+    length_rate = pyro.sample('length_rate', dist.HalfCauchy(prior_length_rate))
     phi_locs = pyro.sample('phi_locs',
                            dist.VonMises(torch.ones(num_states, dtype=torch.float) * prior_loc,
                                          torch.ones(num_states, dtype=torch.float) * prior_conc).to_event(1))
+    phi_kappas = pyro.sample('phi_kappas', dist.TransformedDistribution(
+        dist.HalfCauchy(torch.ones(num_states, dtype=torch.float) * prior_kappa_scale),
+        AffineTransform(0., prior_kappa_min)).to_event(1))
     psi_locs = pyro.sample('psi_locs',
                            dist.VonMises(torch.ones(num_states, dtype=torch.float) * prior_loc,
                                          torch.ones(num_states, dtype=torch.float) * prior_conc).to_event(1))
+    psi_kappas = pyro.sample('psi_kappas', dist.TransformedDistribution(
+        dist.HalfCauchy(torch.ones(num_states, dtype=torch.float) * prior_kappa_scale),
+        AffineTransform(0., prior_kappa_min)).to_event(1))
     element_plate = pyro.plate('elements', 1, dim=-1)
     with pyro.plate('sequences', num_sequences, dim=-2) as batch:
         if lengths is not None:
@@ -55,7 +63,7 @@ def model(phis=None, psis=None, lengths=None,
         sam_lengths = pyro.sample('length',
                                   dist.TransformedDistribution(
                                       dist.GammaPoisson(length_shape, length_rate),
-                                      AffineTransform(0.0, 1.0)),
+                                      AffineTransform(0., 1.)),
                                   obs=obs_length)
         if lengths is None:
             lengths = sam_lengths.squeeze(-1).long()
@@ -72,21 +80,21 @@ def model(phis=None, psis=None, lengths=None,
                 else:
                     obs_psi = None
                 with element_plate:
-                    pyro.sample(f'phi_{t}', dist.VonMises(phi_locs[state], 1.0), obs=obs_phi)
-                    pyro.sample(f'psi_{t}', dist.VonMises(psi_locs[state], 1.0), obs=obs_psi)
+                    pyro.sample(f'phi_{t}', dist.VonMises(phi_locs[state], phi_kappas[state]), obs=obs_phi)
+                    pyro.sample(f'psi_{t}', dist.VonMises(psi_locs[state], psi_kappas[state]), obs=obs_psi)
 
 
 def main(_argv):
     aas, ds, phis, psis, lengths = ProteinParser.parsef_tensor('data/TorusDBN/top500.txt')
-    guide = AutoDelta(poutine.block(model, hide_fn=lambda site: site['name'].startswith('state')),
+    guide = AutoDelta(poutine.block(torus_dbn, hide_fn=lambda site: site['name'].startswith('state')),
                       init_loc_fn=init_to_sample)
-    svi = SVI(model, guide, Adam(dict(lr=0.1)), TraceEnum_ELBO())
+    svi = SVI(torus_dbn, guide, Adam(dict(lr=1e-3)), TraceEnum_ELBO())
     plot_rama(lengths, phis, psis, filename='ground_truth')
-    total_iters = 10
-    num_states = 5
+    total_iters = 100
+    num_states = 55
     plot_rate = 5
     dataset = TensorDataset(phis, psis, lengths)
-    batch_size = 128
+    batch_size = 32
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     with tqdm.trange(total_iters) as pbar:
         total_loss = float('inf')
@@ -103,9 +111,9 @@ def main(_argv):
             pbar.set_description_str(f"SVI ({j}:{i}:{total_iters}): {loss / batch_size:.2} [{total_loss:.2}]",
                                      refresh=True)
             if i % plot_rate == 0:
-                sample_and_plot(model, guide, filename=f'learned_{i}',
+                sample_and_plot(torus_dbn, guide, filename=f'learned_{i}',
                                 num_sequences=len(dataset), num_states=num_states)
-    sample_and_plot(model, guide, filename=f'learned_finish',
+    sample_and_plot(torus_dbn, guide, filename=f'learned_finish',
                     num_sequences=len(dataset), num_states=num_states)
 
 
