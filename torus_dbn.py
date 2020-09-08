@@ -149,6 +149,7 @@ def plot_rama(lengths, phis, psis, filename='rama', dir='figs'):
     ax.yaxis.set_major_locator(multiple.locator())
     os.makedirs(dir, exist_ok=True)
     fig.savefig(os.path.join(dir, f'{filename}.png'))
+    plt.close(fig)
 
 
 def plot_losses(total_losses, filename='elbo', dir='figs'):
@@ -156,6 +157,7 @@ def plot_losses(total_losses, filename='elbo', dir='figs'):
     ax.plot(total_losses)
     os.makedirs(dir, exist_ok=True)
     fig.savefig(os.path.join(dir, f'{filename}.png'))
+    plt.close(fig)
 
 
 if __name__ == '__main__':
