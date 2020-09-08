@@ -26,7 +26,7 @@ def torus_dbn(phis=None, psis=None, lengths=None,
               num_sequences=None, num_states=55,
               prior_conc=0.1, prior_loc=0.0,
               prior_length_shape=100., prior_length_rate=100.,
-              prior_kappa_scale=100., prior_kappa_min=10.):
+              prior_kappa_min=10., prior_kappa_max=1000.):
     # From https://pyro.ai/examples/hmm.html
     with ignore_jit_warnings():
         if lengths is not None:
@@ -43,15 +43,15 @@ def torus_dbn(phis=None, psis=None, lengths=None,
     phi_locs = pyro.sample('phi_locs',
                            dist.VonMises(torch.ones(num_states, dtype=torch.float) * prior_loc,
                                          torch.ones(num_states, dtype=torch.float) * prior_conc).to_event(1))
-    phi_kappas = pyro.sample('phi_kappas', dist.TransformedDistribution(
-        dist.HalfCauchy(torch.ones(num_states, dtype=torch.float) * prior_kappa_scale),
-        AffineTransform(0., prior_kappa_min)).to_event(1))
+    phi_kappas = pyro.sample('phi_kappas', dist.Uniform(torch.ones(num_states, dtype=torch.float) * prior_kappa_min,
+                                                        torch.ones(num_states, dtype=torch.float) * prior_kappa_max
+                                                        ).to_event(1))
     psi_locs = pyro.sample('psi_locs',
                            dist.VonMises(torch.ones(num_states, dtype=torch.float) * prior_loc,
                                          torch.ones(num_states, dtype=torch.float) * prior_conc).to_event(1))
-    psi_kappas = pyro.sample('psi_kappas', dist.TransformedDistribution(
-        dist.HalfCauchy(torch.ones(num_states, dtype=torch.float) * prior_kappa_scale),
-        AffineTransform(0., prior_kappa_min)).to_event(1))
+    psi_kappas = pyro.sample('psi_kappas', dist.Uniform(torch.ones(num_states, dtype=torch.float) * prior_kappa_min,
+                                                        torch.ones(num_states, dtype=torch.float) * prior_kappa_max
+                                                        ).to_event(1))
     element_plate = pyro.plate('elements', 1, dim=-1)
     with pyro.plate('sequences', num_sequences, dim=-2) as batch:
         if lengths is not None:
@@ -88,14 +88,15 @@ def main(_argv):
     aas, ds, phis, psis, lengths = ProteinParser.parsef_tensor('data/TorusDBN/top500.txt')
     guide = AutoDelta(poutine.block(torus_dbn, hide_fn=lambda site: site['name'].startswith('state')),
                       init_loc_fn=init_to_sample)
-    svi = SVI(torus_dbn, guide, Adam(dict(lr=1e-3)), TraceEnum_ELBO())
+    svi = SVI(torus_dbn, guide, Adam(dict(lr=1e-4)), TraceEnum_ELBO())
     plot_rama(lengths, phis, psis, filename='ground_truth')
-    total_iters = 100
+    total_iters = 3
     num_states = 55
     plot_rate = 5
     dataset = TensorDataset(phis, psis, lengths)
     batch_size = 32
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    total_losses = []
     with tqdm.trange(total_iters) as pbar:
         total_loss = float('inf')
         for i in pbar:
@@ -105,16 +106,20 @@ def main(_argv):
                 loss = svi.step(phis, psis, lengths, num_states=num_states)
                 losses.append(loss)
                 num_batches += 1
-                pbar.set_description_str(f"SVI ({j}:{i}:{total_iters}): {loss / batch_size:.2} [{total_loss:.2}]",
+                pbar.set_description_str(f"SVI (batch {j}/{len(dataset)//batch_size}):"
+                                         f" {loss / batch_size:.4} [epoch loss: {total_loss:.4}]",
                                          refresh=True)
             total_loss = np.sum(losses) / (batch_size * num_batches)
-            pbar.set_description_str(f"SVI ({j}:{i}:{total_iters}): {loss / batch_size:.2} [{total_loss:.2}]",
+            total_losses.append(total_loss)
+            pbar.set_description_str(f"SVI (batch {j}/{len(dataset)//batch_size}):"
+                                     f" {loss / batch_size:.4} [epoch loss: {total_loss:.4}]",
                                      refresh=True)
             if i % plot_rate == 0:
                 sample_and_plot(torus_dbn, guide, filename=f'learned_{i}',
                                 num_sequences=len(dataset), num_states=num_states)
     sample_and_plot(torus_dbn, guide, filename=f'learned_finish',
                     num_sequences=len(dataset), num_states=num_states)
+    plot_losses(total_losses)
 
 
 def sample_and_plot(model, guide, filename=None, num_sequences=128, num_states=5):
@@ -142,6 +147,13 @@ def plot_rama(lengths, phis, psis, filename='rama', dir='figs'):
     ax.xaxis.set_major_locator(multiple.locator())
     ax.yaxis.set_major_formatter(multiple.formatter())
     ax.yaxis.set_major_locator(multiple.locator())
+    os.makedirs(dir, exist_ok=True)
+    fig.savefig(os.path.join(dir, f'{filename}.png'))
+
+
+def plot_losses(total_losses, filename='elbo', dir='figs'):
+    fig, ax = plt.subplots()
+    ax.plot(total_losses)
     os.makedirs(dir, exist_ok=True)
     fig.savefig(os.path.join(dir, f'{filename}.png'))
 
