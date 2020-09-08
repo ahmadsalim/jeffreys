@@ -88,9 +88,9 @@ def main(_argv):
     aas, ds, phis, psis, lengths = ProteinParser.parsef_tensor('data/TorusDBN/top500.txt')
     guide = AutoDelta(poutine.block(torus_dbn, hide_fn=lambda site: site['name'].startswith('state')),
                       init_loc_fn=init_to_sample)
-    svi = SVI(torus_dbn, guide, Adam(dict(lr=1e-4)), TraceEnum_ELBO())
+    svi = SVI(torus_dbn, guide, Adam(dict(lr=0.1)), TraceEnum_ELBO())
     plot_rama(lengths, phis, psis, filename='ground_truth')
-    total_iters = 3
+    total_iters = 100
     num_states = 55
     plot_rate = 5
     dataset = TensorDataset(phis, psis, lengths)
