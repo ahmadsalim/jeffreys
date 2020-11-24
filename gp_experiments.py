@@ -66,6 +66,29 @@ class VSGP(dist.Distribution):
         return self._out_dist.log_prob(x, *args, **kwargs)
 
 
+def model(num_hidden=50):
+    zs = pyro.sample('zs', VSGP(OUKernel(drift, scale), inducing_set,
+                                dist.MultivariateNormal, input_data=input_data))
+    decoder = torch.nn.GRU(30, num_hidden)
+    pyro.module('decoder', decoder)
+    mean_nn = torch.nn.Sequential(torch.nn.Linear(num_hidden, 1),
+                                  torch.nn.Sigmoid())
+    kappa_nn = torch.nn.Sequential(torch.nn.Linear(num_hidden, 1),
+                                   torch.nn.Softplus())
+    mean_nn2 = torch.nn.Sequential(torch.nn.Linear(num_hidden, 1),
+                                   torch.nn.Sigmoid())
+    kappa_nn2 = torch.nn.Sequential(torch.nn.Linear(num_hidden, 1),
+                                    torch.nn.Softplus())
+    pyro.module('param_nn', param_nn)
+    decoded = decoder(zs)  # Should autoregress on zs
+    means1 = mean_nn(decoded)
+    kappas1 = kappa_nn(decoded)
+    means2 = mean_nn2(decoded)
+    kappas2 = kappa_nn2(decoded)
+    pyro.sample('phis', dist.VonMises(means1, kappas1), obs=observed_phis)
+    pyro.sample('psis', dist.VonMises(means2, kappas2), obs=observed_psis)
+
+
 def main(_args):
     inducing_set = torch.randn(10) * 10
     kernel = OUKernel(5.3, 0.1)
